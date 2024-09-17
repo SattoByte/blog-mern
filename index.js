@@ -1,13 +1,14 @@
 import express from 'express';
-import jwt from 'jsonwebtoken';
-import bcrypt from 'bcrypt';
-import mongoose from 'mongoose';
-import { validationResult } from 'express-validator';
+import multer from 'multer';
 
-import { registerValidation } from './validations/auth.js';
-import UserModel from './models/User.js';
-import checkAuth from './utils/checkAuth.js'
-import User from './models/User.js';
+import mongoose from 'mongoose';
+
+import { registerValidation, loginValidation, postCreateValidation } from './validations.js';
+
+import { UserController, PostController } from './controllers/index.js';
+
+import { handleValidationErrors, checkAuth } from './utils/index.js';
+
 
 mongoose
   .connect('mongodb+srv://admin:wwwwww@cluster0.6oxue.mongodb.net/blog?retryWrites=true&w=majority&appName=Cluster0')
@@ -16,119 +17,47 @@ mongoose
 
 const app = express();
 
-app.use(express.json());
-
-app.post('/auth/login', async (req, res) => {
-  try {
-    const user = await UserModel.findOne({ email: req.body.email });
-    if (!user) {
-      return res.status(404).json({
-        message: 'Can not reach User'
-      });
-
-    }
-    const isvalidPass = await bcrypt.compare(req.body.password, user._doc.passwordHash)
-
-    if (!isvalidPass) {
-      return res.status(400).json({
-        message: 'Incorrect Login or Password'
-      });
-    }
-
-    const token = jwt.sign(
-      {
-        _id: user._id,
-      },
-      'secret123',
-      {
-        expiresIn: '30d',
-      },
-    );
-
-    const { passwordHash, ...userData } = user._doc;
-
-    res.json({
-      ...userData,
-      token,
-    });
-
-  } catch (err) {
-    console.log(err);
-    res.status(500).json({
-      message: "Couldn't Log In",
-    });
-  }
-})
-
-app.post('/auth/register', registerValidation, async (req, res) => {
-  try {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json(errors.array());
-    }
-
-    const password = req.body.password; //raw password
-    const salt = await bcrypt.genSalt(10); //encrypt pass
-    const hash = await bcrypt.hash(password, salt); //encryption process
-
-    const doc = new UserModel({
-      email: req.body.email,
-      fullName: req.body.fullName,
-      avatarUrl: req.body.avatarUrl,
-      passwordHash: hash,
-    });
-
-    const user = await doc.save();
-
-    const token = jwt.sign(
-      {
-        _id: user._id,
-      },
-      'secret123',
-      {
-        expiresIn: '30d',
-      },
-    );
-
-    const { passwordHash, ...userData } = user._doc;
-
-    res.json({
-      ...userData,
-      token,
-    });
-
-  } catch (err) {
-    console.log(err);
-    res.status(500).json({
-      message: "Couldn't register user",
-    });
-  }
+const storage = multer.diskStorage({
+  destination: (_, __, cb) => {
+    cb(null, 'uploads');
+  },
+  fileName: (_, file, cb) => {
+    cb(null, file.originalName);
+  },
 });
 
-app.get('/auth/me', checkAuth, async (req, res) => {
-  try {
-    const user = await UserModel.findById(req.userId);
-    if (!user) {
-      return res.status(404).json({
-        message: 'Can not reach user'
-      });
-    }
+const upload = multer({ storage });
 
-    const { passwordHash, ...userData } = user._doc;
-    res.json({
-      ...userData,
-      token,
-    });
+app.use(express.json());
+app.use('/uploads', express.static('uploads'));
 
-  } catch (err) {
+app.post('/auth/login', loginValidation, handleValidationErrors, UserController.login);
+app.post('/auth/register', registerValidation, handleValidationErrors, UserController.register);
+app.get('/auth/me', checkAuth, UserController.getMe);
 
-  }
-})
+app.post('/upload', checkAuth, upload.single('image'), (req, res) => {
+  res.json({
+    url: `uploads/${req.file.originalname}`,
+  });
+});
+
+app.get('/posts', PostController.getAll);
+app.get('/posts/:id', PostController.getOne);
+app.post('/posts', checkAuth, postCreateValidation, handleValidationErrors, PostController.create);
+app.delete('/posts/:id', checkAuth, PostController.remove);
+app.patch(
+  '/posts/:id',
+  checkAuth,
+  postCreateValidation,
+  handleValidationErrors,
+  PostController.update
+);
 
 app.listen(4444, (err) => {
   if (err) {
     return console.log(err)
   }
+
   //listen to port 4444 and if there is no error, write OK in the console!
   console.log('Server OK!');
 });
